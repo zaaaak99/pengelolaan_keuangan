@@ -8863,6 +8863,45 @@
       autocapitalize: none;
     }
 
+
+    /* Arahan login email agar user tidak bingung setelah daftar */
+    .auth-email-guide {
+      width: 100%;
+      display: grid;
+      gap: 6px;
+      margin: 14px 0 18px;
+      padding: 14px 16px;
+      border-radius: 18px;
+      border: 1px solid rgba(247, 217, 141, .38);
+      background: linear-gradient(135deg, rgba(247,217,141,.16), rgba(255,255,255,.05));
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.45;
+      text-align: left;
+    }
+
+    .auth-email-guide strong {
+      color: var(--text);
+      font-size: 15px;
+      margin-bottom: 2px;
+    }
+
+    .auth-email-guide b {
+      color: var(--gold-2);
+    }
+
+    .auth-email-guide.success {
+      border-color: rgba(52, 211, 153, .38);
+      background: linear-gradient(135deg, rgba(52,211,153,.14), rgba(255,255,255,.05));
+    }
+
+    @media (max-width: 520px) {
+      .auth-email-guide {
+        font-size: 13px;
+        padding: 12px 14px;
+      }
+    }
+
 </style>
 </head>
 <body>
@@ -8958,6 +8997,15 @@
         <h2 id="authBrandName" style="margin:0 0 6px;letter-spacing:-.04em;">zakiy</h2>
         <p class="small" style="margin-bottom:10px;">Buat akun aman memakai email dan password.</p>
         <div class="google-badge">🔐 Email + Password Aman</div>
+
+          <div class="auth-email-guide" id="authEmailGuide">
+            <strong>📩 Cara masuk pakai email</strong>
+            <span>1. Daftar pakai email aktif.</span>
+            <span>2. Buka email dari <b>Supabase Auth</b>.</span>
+            <span>3. Klik <b>Confirm your mail</b>.</span>
+            <span>4. Kembali ke web ini, lalu pilih <b>Login</b>.</span>
+          </div>
+
 
         <div class="auth-tabs">
           <button id="registerTab" class="active" type="button" onclick="switchAuth('register')">Daftar</button>
@@ -14474,7 +14522,8 @@
         const auth = await supabaseSignUp(email, password, displayName);
 
         if (!auth.access_token || !auth.user?.id) {
-          showToast("Daftar berhasil. Cek email untuk verifikasi, lalu login.");
+          showToast("Daftar berhasil. Cek email kamu, klik Confirm your mail, lalu kembali login.");
+          showEmailConfirmationGuide?.(email);
           switchAuth("login");
           document.getElementById("loginName").value = email;
           document.getElementById("registerForm").reset();
@@ -15978,6 +16027,22 @@
       document.addEventListener("DOMContentLoaded", applyAuthEmailFields);
       window.addEventListener("pageshow", applyAuthEmailFields, { passive: true });
       setTimeout(applyAuthEmailFields, 300);
+    })();
+
+
+    /* Arahan setelah daftar email Supabase */
+    (function fixEmailSignupGuidance() {
+      window.showEmailConfirmationGuide = function(email) {
+        const guide = document.getElementById("authEmailGuide");
+        if (!guide) return;
+        guide.classList.add("success");
+        guide.innerHTML = `
+          <strong>✅ Daftar hampir selesai</strong>
+          <span>Email konfirmasi sudah dikirim ke <b>${escapeHTML(email || "email kamu")}</b>.</span>
+          <span>Buka email dari <b>Supabase Auth</b>, lalu klik <b>Confirm your mail</b>.</span>
+          <span>Setelah itu kembali ke web ini dan pilih tab <b>Login</b>.</span>
+        `;
+      };
     })();
 
 </script>
