@@ -8848,6 +8848,13 @@
       }
     }
 
+
+    /* Supabase Auth: form login menggunakan email agar aman untuk publik */
+    #loginName,
+    #registerName {
+      text-transform: none !important;
+    }
+
 </style>
 </head>
 <body>
@@ -8941,8 +8948,8 @@
       <div class="pin-box auth-box">
         <div class="brand-logo" id="authBrandLogo">z</div>
         <h2 id="authBrandName" style="margin:0 0 6px;letter-spacing:-.04em;">zakiy</h2>
-        <p class="small" style="margin-bottom:10px;">Buat akun dulu, lalu masuk memakai nama dan password.</p>
-        <div class="google-badge">👤 Nama akun + Password</div>
+        <p class="small" style="margin-bottom:10px;">Buat akun aman memakai email dan password.</p>
+        <div class="google-badge">🔐 Email + Password Aman</div>
 
         <div class="auth-tabs">
           <button id="registerTab" class="active" type="button" onclick="switchAuth('register')">Daftar</button>
@@ -9827,7 +9834,7 @@
     const SUPABASE_CONFIG = {
       url: "https://cyngmphizzsnhqfxfsgk.supabase.co",
       anonKey: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImN5bmdtcGhpenpzbmhxZnhmc2drIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc5NjYxNzcsImV4cCI6MjA5MzU0MjE3N30.B54embe4exGxJGC1HSJce54ey_usXf51DA1XAEBEeuw",
-      table: "zakiy_records"
+      table: "zakiy_secure_records"
     };
 
     const supabaseCloud = {
@@ -9891,6 +9898,164 @@
       supabaseCloud.ready = true;
       cloud.enabled = false; // pastikan Firebase tidak dipakai
       return true;
+    }
+
+
+    /*
+      SUPABASE AUTH AMAN PUBLIK
+      Login/daftar memakai Supabase Auth. Data database dibatasi RLS per user.
+    */
+    const SUPABASE_AUTH_SESSION_KEY = "zakiy_supabase_auth_session_v1";
+
+    function getStoredSupabaseSession() {
+      try {
+        const raw = localStorage.getItem(SUPABASE_AUTH_SESSION_KEY);
+        return raw ? JSON.parse(raw) : null;
+      } catch (error) {
+        return null;
+      }
+    }
+
+    function saveSupabaseSession(session) {
+      if (!session || !session.access_token) return;
+      const expiresAt = session.expires_at
+        ? Number(session.expires_at) * 1000
+        : Date.now() + Number(session.expires_in || 3600) * 1000;
+
+      const payload = {
+        access_token: session.access_token,
+        refresh_token: session.refresh_token || "",
+        expires_at: expiresAt,
+        user: session.user || null
+      };
+
+      localStorage.setItem(SUPABASE_AUTH_SESSION_KEY, JSON.stringify(payload));
+      if (payload.user?.id) localStorage.setItem(LAST_USER_KEY, payload.user.id);
+      localStorage.removeItem(LOGGED_OUT_KEY);
+    }
+
+    function clearSupabaseSession() {
+      try {
+        localStorage.removeItem(SUPABASE_AUTH_SESSION_KEY);
+      } catch (error) {}
+    }
+
+    function getSupabaseAccessToken() {
+      return getStoredSupabaseSession()?.access_token || "";
+    }
+
+    async function supabaseAuthFetch(path, body, accessToken = "") {
+      const headers = {
+        "apikey": SUPABASE_CONFIG.anonKey,
+        "Content-Type": "application/json"
+      };
+      if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
+
+      const response = await fetch(`${SUPABASE_CONFIG.url}/auth/v1/${path}`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body || {})
+      });
+
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const message = data?.error_description || data?.msg || data?.message || "Request Supabase Auth gagal.";
+        throw new Error(message);
+      }
+      return data;
+    }
+
+    async function supabaseSignUp(email, password, displayName = "") {
+      const data = await supabaseAuthFetch("signup", {
+        email,
+        password,
+        data: { display_name: displayName || email.split("@")[0] }
+      });
+      if (data.access_token) saveSupabaseSession(data);
+      return data;
+    }
+
+    async function supabaseSignIn(email, password) {
+      const data = await supabaseAuthFetch("token?grant_type=password", { email, password });
+      saveSupabaseSession(data);
+      return data;
+    }
+
+    async function refreshSupabaseSession() {
+      const session = getStoredSupabaseSession();
+      if (!session?.refresh_token) return null;
+      const data = await supabaseAuthFetch("token?grant_type=refresh_token", {
+        refresh_token: session.refresh_token
+      });
+      saveSupabaseSession(data);
+      return getStoredSupabaseSession();
+    }
+
+    async function getValidSupabaseSession() {
+      if (!hasSupabaseConfig()) return null;
+      const session = getStoredSupabaseSession();
+      if (!session?.access_token || !session?.user?.id) return null;
+
+      if (Date.now() < Number(session.expires_at || 0) - 60000) {
+        return session;
+      }
+
+      try {
+        return await refreshSupabaseSession();
+      } catch (error) {
+        clearSupabaseSession();
+        return null;
+      }
+    }
+
+    async function supabaseSignOut() {
+      const token = getSupabaseAccessToken();
+      if (token) {
+        try {
+          await fetch(`${SUPABASE_CONFIG.url}/auth/v1/logout`, {
+            method: "POST",
+            headers: {
+              "apikey": SUPABASE_CONFIG.anonKey,
+              "Authorization": `Bearer ${token}`,
+              "Content-Type": "application/json"
+            }
+          });
+        } catch (error) {}
+      }
+      clearSupabaseSession();
+    }
+
+    function isEmail(value) {
+      return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || "").trim());
+    }
+
+    function supabaseAuthHeaders(extra = {}) {
+      const token = getSupabaseAccessToken();
+      return {
+        "apikey": SUPABASE_CONFIG.anonKey,
+        "Authorization": `Bearer ${token || SUPABASE_CONFIG.anonKey}`,
+        "Content-Type": "application/json",
+        "Prefer": "return=representation",
+        ...extra
+      };
+    }
+
+    async function secureSupabaseRequest(path, options = {}) {
+      const session = await getValidSupabaseSession();
+      if (!session?.access_token) throw new Error("Session login Supabase tidak aktif.");
+
+      const response = await fetch(`${SUPABASE_CONFIG.url}/rest/v1/${path}`, {
+        ...options,
+        headers: supabaseAuthHeaders(options.headers || {})
+      });
+
+      if (!response.ok) {
+        const message = await response.text().catch(() => "");
+        throw new Error(`Supabase ${response.status}: ${message}`);
+      }
+
+      if (response.status === 204) return null;
+      return response.json().catch(() => null);
     }
 
     const cloud = {
@@ -14277,13 +14442,13 @@
     async function registerUser(event) {
       event.preventDefault();
 
-      const displayName = displayUserName(document.getElementById("registerName").value);
-      const userKey = normalizeUserName(displayName);
+      const email = String(document.getElementById("registerName").value || "").trim().toLowerCase();
       const password = document.getElementById("registerPassword").value;
       const password2 = document.getElementById("registerPassword2").value;
+      const displayName = email.split("@")[0] || "User";
 
-      if (userKey.length < 3) {
-        showToast("Nama akun minimal 3 karakter.");
+      if (!isEmail(email)) {
+        showToast("Masukkan email yang valid.");
         return;
       }
 
@@ -14297,86 +14462,127 @@
         return;
       }
 
-      const existing = await getOne("users", userKey);
-      if (existing) {
-        showToast("Nama akun ini sudah terdaftar. Silakan login.");
-        switchAuth("login");
-        document.getElementById("loginName").value = displayName;
-        return;
+      try {
+        const auth = await supabaseSignUp(email, password, displayName);
+
+        if (!auth.access_token || !auth.user?.id) {
+          showToast("Daftar berhasil. Cek email untuk verifikasi, lalu login.");
+          switchAuth("login");
+          document.getElementById("loginName").value = email;
+          document.getElementById("registerForm").reset();
+          return;
+        }
+
+        await putData("users", {
+          email: auth.user.id,
+          authEmail: email,
+          displayName,
+          passwordHash: "",
+          appName: DEFAULT_BRAND_NAME,
+          profilePhoto: "",
+          pinEnabled: false,
+          pinHash: "",
+          pinLength: 0,
+          dateFormat: currentDateFormat,
+          language: currentLanguage,
+          customCategories: { income: [], expense: [] },
+          createdAt: new Date().toISOString()
+        });
+
+        document.getElementById("registerForm").reset();
+        await setLoggedUser(auth.user.id);
+        showToast("Daftar berhasil. Kamu sudah masuk dashboard.");
+      } catch (error) {
+        console.error(error);
+        showToast(error.message || "Daftar gagal. Coba lagi.");
       }
-
-      await putData("users", {
-        email: userKey,
-        displayName,
-        passwordHash: await hashPassword(password),
-        appName: DEFAULT_BRAND_NAME,
-        profilePhoto: "",
-        pinEnabled: false,
-        pinHash: "",
-        dateFormat: currentDateFormat,
-        language: currentLanguage,
-        customCategories: { income: [], expense: [] },
-        createdAt: new Date().toISOString()
-      });
-
-      document.getElementById("registerForm").reset();
-      await setLoggedUser(userKey);
-      showToast("Daftar berhasil. Kamu sudah masuk dashboard.");
     }
 
     async function loginUser(event) {
       event.preventDefault();
       clearFormWarning("loginWarning", "loginPassword");
 
-      const displayName = displayUserName(document.getElementById("loginName").value);
-      const userKey = normalizeUserName(displayName);
+      const email = String(document.getElementById("loginName").value || "").trim().toLowerCase();
       const password = document.getElementById("loginPassword").value;
 
-      if (userKey.length < 3) {
-        showFormWarning("loginWarning", "loginPassword", "Masukkan nama akun yang sudah didaftarkan.");
-        showToast("Masukkan nama akun yang sudah didaftarkan.");
+      if (!isEmail(email)) {
+        showFormWarning("loginWarning", "loginPassword", "Masukkan email yang sudah didaftarkan.");
+        showToast("Masukkan email yang sudah didaftarkan.");
         return;
       }
 
-      const user = await getOne("users", userKey);
-      if (!user) {
-        showFormWarning("loginWarning", "loginPassword", "Nama akun belum terdaftar. Silakan daftar dulu.");
-        showToast("Nama akun belum terdaftar. Silakan daftar dulu.");
-        switchAuth("register");
-        document.getElementById("registerName").value = displayName;
-        return;
-      }
+      try {
+        const auth = await supabaseSignIn(email, password);
+        if (!auth.user?.id) throw new Error("Login gagal.");
 
-      const passwordHash = await hashPassword(password);
-      if (passwordHash !== user.passwordHash) {
-        showFormWarning("loginWarning", "loginPassword", "Password salah. Silakan coba lagi.");
-        showToast("Password salah.");
+        let user = await getOne("users", auth.user.id);
+        if (!user) {
+          await putData("users", {
+            email: auth.user.id,
+            authEmail: email,
+            displayName: auth.user.user_metadata?.display_name || email.split("@")[0],
+            passwordHash: "",
+            appName: DEFAULT_BRAND_NAME,
+            profilePhoto: "",
+            pinEnabled: false,
+            pinHash: "",
+            pinLength: 0,
+            dateFormat: currentDateFormat,
+            language: currentLanguage,
+            customCategories: { income: [], expense: [] },
+            createdAt: new Date().toISOString()
+          });
+        }
+
+        clearFormWarning("loginWarning", "loginPassword");
+        document.getElementById("loginForm").reset();
+        await setLoggedUser(auth.user.id);
+        showToast("Login berhasil.");
+      } catch (error) {
+        console.error(error);
+        showFormWarning("loginWarning", "loginPassword", "Email atau password salah.");
+        showToast("Email atau password salah.");
         document.getElementById("loginPassword")?.focus();
-        return;
       }
-
-      clearFormWarning("loginWarning", "loginPassword");
-      document.getElementById("loginForm").reset();
-      await setLoggedUser(userKey);
-      showToast("Login berhasil.");
     }
 
     async function setLoggedUser(userKey, options = {}) {
       const rememberSession = options.remember !== false;
-      currentUserEmail = normalizeUserName(userKey);
+      currentUserEmail = String(userKey || "").trim();
       if (currentUserEmail) {
         localStorage.setItem(LAST_USER_KEY, currentUserEmail);
-        saveLoginSession(currentUserEmail);
+        if (rememberSession) saveLoginSession(currentUserEmail);
       }
-      const user = await getOne("users", currentUserEmail);
-      currentUserName = user?.displayName || currentUserEmail || "User";
+
+      let user = await getOne("users", currentUserEmail);
+      const authSession = getStoredSupabaseSession();
+      const authEmail = authSession?.user?.email || user?.authEmail || "";
+
+      if (!user && currentUserEmail) {
+        user = {
+          email: currentUserEmail,
+          authEmail,
+          displayName: authEmail ? authEmail.split("@")[0] : "User",
+          appName: DEFAULT_BRAND_NAME,
+          profilePhoto: "",
+          pinEnabled: false,
+          pinHash: "",
+          pinLength: 0,
+          dateFormat: currentDateFormat,
+          language: currentLanguage,
+          customCategories: { income: [], expense: [] },
+          createdAt: new Date().toISOString()
+        };
+        await putData("users", user);
+      }
+
+      currentUserName = user?.displayName || authEmail || "User";
       currentUserProfilePhoto = user?.profilePhoto || "";
       currentDateFormat = user?.dateFormat || localStorage.getItem("zakiyDateFormat") || "medium";
       currentLanguage = user?.language || localStorage.getItem("zakiyLanguage") || "id";
       customCategories = normalizeCustomCategories(user?.customCategories);
       localStorage.setItem("zakiyDateFormat", currentDateFormat);
       localStorage.setItem("zakiyLanguage", currentLanguage);
-      if (rememberSession) saveLoginSession(currentUserEmail);
       applyBranding(user?.appName || DEFAULT_BRAND_NAME);
       applyTheme(user?.theme || localStorage.getItem("zakiyTheme") || "light", true);
       applyLanguage(currentLanguage, true);
@@ -14398,16 +14604,11 @@
     }
 
     async function checkAuth() {
-      const savedUserKey = normalizeUserName(getLoginSession());
+      const session = await getValidSupabaseSession();
 
-      if (savedUserKey) {
-        const savedUser = await getOne("users", savedUserKey);
-        if (savedUser) {
-          await setLoggedUser(savedUserKey, { remember: false });
-          return;
-        }
-
-        clearLoginSession();
+      if (session?.user?.id && localStorage.getItem(LOGGED_OUT_KEY) !== "1") {
+        await setLoggedUser(session.user.id, { remember: false });
+        return;
       }
 
       clearPinUnlock();
@@ -14424,7 +14625,7 @@
       updateUserUI();
       document.getElementById("pinGateScreen")?.classList.remove("show");
       document.getElementById("authScreen").classList.add("show");
-      switchAuth("register");
+      switchAuth("login");
     }
 
     function updateUserUI() {
@@ -14466,6 +14667,7 @@
     }
 
     function logout() {
+      supabaseSignOut();
       clearLoginSession();
       clearPinUnlock();
       currentUserEmail = "";
@@ -15556,11 +15758,12 @@
     })();
 
 
+
     /* =====================================================
-       SUPABASE CRUD PATCH
-       Supaya akun/data tersimpan online dan bisa login di device mana saja.
+       SUPABASE AUTH + RLS CRUD PATCH
+       Data hanya bisa dibaca/diubah oleh user yang sedang login.
        ===================================================== */
-    (function installSupabaseCRUDPatch() {
+    (function installSupabaseSecureCRUDPatch() {
       if (!hasSupabaseConfig()) return;
 
       const originalGetAll = getAll;
@@ -15570,24 +15773,32 @@
       const originalDeleteData = deleteData;
       const originalClearStore = clearStore;
 
-      async function supabaseGetRows(storeName) {
+      function secureRecordKey(storeName, keyOrRow) {
+        if (storeName === "users") return String(keyOrRow?.email ?? keyOrRow);
+        if (storeName === "settings") return String(keyOrRow?.key ?? keyOrRow);
+        return String(keyOrRow?.id ?? keyOrRow);
+      }
+
+      function secureRecordId(storeName, keyOrRow) {
+        const userId = String(currentUserEmail || getStoredSupabaseSession()?.user?.id || "");
+        const key = secureRecordKey(storeName, keyOrRow);
+        return `${userId}:${storeName}:${key}`;
+      }
+
+      async function secureGetRows(storeName) {
         if (!supabaseCloud.enabled) return null;
+        if (!currentUserEmail) return [];
 
-        let query = `${SUPABASE_CONFIG.table}?select=data&store_name=eq.${encodeURIComponent(storeName)}`;
-        if (storeName !== "users") {
-          if (!currentUserEmail) return [];
-          query += `&user_email=eq.${encodeURIComponent(currentUserEmail)}`;
-        }
-
-        const rows = await supabaseRequest(query, { method: "GET" });
+        let query = `${SUPABASE_CONFIG.table}?select=data&store_name=eq.${encodeURIComponent(storeName)}&order=updated_at.desc`;
+        const rows = await secureSupabaseRequest(query, { method: "GET" });
         return (rows || []).map(row => row.data || {}).filter(Boolean);
       }
 
-      async function supabaseGetRow(storeName, key) {
+      async function secureGetRow(storeName, key) {
         if (!supabaseCloud.enabled) return null;
 
-        const recordId = supabaseRecordId(storeName, key);
-        const rows = await supabaseRequest(`${SUPABASE_CONFIG.table}?select=data&id=eq.${encodeURIComponent(recordId)}&limit=1`, {
+        const recordId = secureRecordId(storeName, key);
+        const rows = await secureSupabaseRequest(`${SUPABASE_CONFIG.table}?select=data&id=eq.${encodeURIComponent(recordId)}&limit=1`, {
           method: "GET"
         });
 
@@ -15595,34 +15806,34 @@
         return row || null;
       }
 
-      async function supabaseUpsert(storeName, data) {
+      async function secureUpsert(storeName, data) {
         if (!supabaseCloud.enabled) return null;
+        if (!currentUserEmail && storeName !== "users") throw new Error("Belum login.");
 
         const payload = cloneBackupData(data || {});
         if (storeName === "users") {
-          payload.email = normalizeUserName(payload.email || currentUserEmail || payload.displayName || "");
+          payload.email = String(payload.email || currentUserEmail || getStoredSupabaseSession()?.user?.id || "");
+          payload.authEmail = payload.authEmail || getStoredSupabaseSession()?.user?.email || "";
         } else if (storeName === "settings") {
           payload.key = String(payload.key || "settings");
-          payload.userEmail = payload.userEmail || currentUserEmail;
+          payload.userEmail = currentUserEmail;
         } else {
           if (!payload.id) payload.id = Date.now() + Math.floor(Math.random() * 100000);
-          payload.userEmail = payload.userEmail || currentUserEmail;
+          payload.userEmail = currentUserEmail;
         }
 
-        const recordKey = supabaseRecordKey(storeName, payload);
-        const id = supabaseRecordId(storeName, payload);
-        const userEmail = storeName === "users" ? payload.email : normalizeUserName(payload.userEmail || currentUserEmail);
+        const id = secureRecordId(storeName, payload);
+        const recordKey = secureRecordKey(storeName, payload);
 
         const body = [{
           id,
           store_name: storeName,
           record_key: recordKey,
-          user_email: userEmail,
           data: payload,
           updated_at: new Date().toISOString()
         }];
 
-        await supabaseRequest(`${SUPABASE_CONFIG.table}?on_conflict=id`, {
+        await secureSupabaseRequest(`${SUPABASE_CONFIG.table}?on_conflict=id`, {
           method: "POST",
           headers: { "Prefer": "resolution=merge-duplicates,return=representation" },
           body: JSON.stringify(body)
@@ -15632,10 +15843,10 @@
         return storeName === "users" ? payload.email : (storeName === "settings" ? payload.key : payload.id);
       }
 
-      async function supabaseDelete(storeName, key) {
+      async function secureDelete(storeName, key) {
         if (!supabaseCloud.enabled) return false;
-        const id = supabaseRecordId(storeName, key);
-        await supabaseRequest(`${SUPABASE_CONFIG.table}?id=eq.${encodeURIComponent(id)}`, {
+        const id = secureRecordId(storeName, key);
+        await secureSupabaseRequest(`${SUPABASE_CONFIG.table}?id=eq.${encodeURIComponent(id)}`, {
           method: "DELETE"
         });
         localDelete(storeName, key);
@@ -15645,13 +15856,13 @@
       getAll = async function(storeName) {
         if (supabaseCloud.enabled) {
           try {
-            const rows = await supabaseGetRows(storeName);
+            const rows = await secureGetRows(storeName);
             if (Array.isArray(rows)) {
               rows.forEach(row => localPut(storeName, row));
               return rows;
             }
           } catch (error) {
-            console.warn("Supabase gagal dibaca, memakai backup device:", error);
+            console.warn("Supabase aman gagal dibaca, memakai backup device:", error);
             return localGetAll(storeName);
           }
         }
@@ -15661,14 +15872,14 @@
       getOne = async function(storeName, key) {
         if (supabaseCloud.enabled) {
           try {
-            const row = await supabaseGetRow(storeName, key);
+            const row = await secureGetRow(storeName, key);
             if (row) {
               localPut(storeName, row);
               return row;
             }
             return localGetOne(storeName, key);
           } catch (error) {
-            console.warn("Supabase gagal dibaca, memakai backup device:", error);
+            console.warn("Supabase aman gagal dibaca, memakai backup device:", error);
             return localGetOne(storeName, key);
           }
         }
@@ -15678,9 +15889,9 @@
       addData = async function(storeName, data) {
         if (supabaseCloud.enabled) {
           try {
-            return await supabaseUpsert(storeName, data);
+            return await secureUpsert(storeName, data);
           } catch (error) {
-            console.warn("Supabase gagal simpan, memakai backup device:", error);
+            console.warn("Supabase aman gagal simpan, memakai backup device:", error);
             return localPut(storeName, data);
           }
         }
@@ -15690,9 +15901,9 @@
       putData = async function(storeName, data) {
         if (supabaseCloud.enabled) {
           try {
-            return await supabaseUpsert(storeName, data);
+            return await secureUpsert(storeName, data);
           } catch (error) {
-            console.warn("Supabase gagal simpan, memakai backup device:", error);
+            console.warn("Supabase aman gagal simpan, memakai backup device:", error);
             return localPut(storeName, data);
           }
         }
@@ -15702,10 +15913,10 @@
       deleteData = async function(storeName, id) {
         if (supabaseCloud.enabled) {
           try {
-            await supabaseDelete(storeName, id);
+            await secureDelete(storeName, id);
             return;
           } catch (error) {
-            console.warn("Supabase gagal hapus, hapus lokal saja:", error);
+            console.warn("Supabase aman gagal hapus, hapus lokal saja:", error);
             localDelete(storeName, id);
             return;
           }
