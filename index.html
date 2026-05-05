@@ -8911,6 +8911,20 @@
       transform: none !important;
     }
 
+
+    /* Fix daftar email supaya tidak terlihat stuck */
+    #registerWarning.field-alert {
+      display: none;
+    }
+    #registerWarning.field-alert.show {
+      display: block;
+    }
+    .auth-form button:disabled {
+      opacity: .72 !important;
+      cursor: wait !important;
+      transform: none !important;
+    }
+
 </style>
 </head>
 <body>
@@ -9014,6 +9028,8 @@
             <span>3. Klik <b>Confirm your mail</b>.</span>
             <span>4. Kembali ke web ini, lalu pilih <b>Login</b>.</span>
             <span>Kalau email belum masuk, cek folder <b>Spam/Promotions</b> atau tunggu 1–2 menit.</span>
+            <span><b>Jika tombol daftar diam/stuck:</b> buka Supabase → Authentication → Providers → Email, pastikan <b>Email provider ON</b> dan <b>Allow signups ON</b>.</span>
+
 
           </div>
 
@@ -9045,6 +9061,7 @@
           <label>Ulangi Password
             <input id="registerPassword2" type="password" autocomplete="new-password" placeholder="Ulangi password" required />
           </label>
+          <div id="registerWarning" class="field-alert" role="alert" aria-live="assertive"></div>
           <button class="btn btn-primary" type="submit">Daftar & Masuk</button>
           <button class="btn btn-ghost" type="button" onclick="switchAuth('login')">Sudah punya akun? Login</button>
         </form>
@@ -10014,39 +10031,44 @@
     async function supabaseAuthFetch(path, body, accessToken = "") {
       const headers = {
         "apikey": SUPABASE_CONFIG.anonKey,
+        "Authorization": `Bearer ${accessToken || SUPABASE_CONFIG.anonKey}`,
         "Content-Type": "application/json"
       };
-      if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
 
       const controller = new AbortController();
-      const timeout = window.setTimeout(() => controller.abort(), 18000);
+      const timeoutId = window.setTimeout(() => controller.abort(), 12000);
 
-      try {
-        const response = await fetch(`${SUPABASE_CONFIG.url}/auth/v1/${path}`, {
-          method: "POST",
-          headers,
-          body: JSON.stringify(body || {}),
-          signal: controller.signal
-        });
+      const fetchTask = fetch(`${SUPABASE_CONFIG.url}/auth/v1/${path}`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body || {}),
+        signal: controller.signal
+      });
 
-        const data = await response.json().catch(() => ({}));
-        if (!response.ok) {
-          const message = data?.error_description || data?.msg || data?.message || "Request Supabase Auth gagal.";
-          throw new Error(message);
-        }
-        return data;
-      } catch (error) {
-        if (error?.name === "AbortError") {
-          throw new Error("Koneksi ke server terlalu lama. Coba lagi atau cek internet.");
-        }
-        throw error;
-      } finally {
-        window.clearTimeout(timeout);
-      }
+      const timeoutTask = new Promise((_, reject) => {
+        window.setTimeout(() => reject(new Error("Server lama merespons. Cek internet atau setting Auth Supabase.")), 13000);
+      });
+
+      return Promise.race([fetchTask, timeoutTask])
+        .then(async response => {
+          const data = await response.json().catch(() => ({}));
+          if (!response.ok) {
+            const message = data?.error_description || data?.msg || data?.message || "Request Supabase Auth gagal.";
+            throw new Error(message);
+          }
+          return data;
+        })
+        .catch(error => {
+          if (error?.name === "AbortError") {
+            throw new Error("Server lama merespons. Cek internet atau setting Auth Supabase.");
+          }
+          throw error;
+        })
+        .finally(() => window.clearTimeout(timeoutId));
     }
-
     async function supabaseSignUp(email, password, displayName = "") {
-      const data = await supabaseAuthFetch("signup", {
+      const redirectTo = encodeURIComponent(window.location.href.split("#")[0]);
+      const data = await supabaseAuthFetch(`signup?redirect_to=${redirectTo}`, {
         email,
         password,
         data: { display_name: displayName || email.split("@")[0] }
@@ -14526,38 +14548,46 @@
       const submitBtn = form?.querySelector('button[type="submit"]');
       const oldBtnText = submitBtn ? submitBtn.textContent : "";
 
+      clearFormWarning("registerWarning", "registerName");
+
       const email = String(document.getElementById("registerName").value || "").trim().toLowerCase();
       const password = document.getElementById("registerPassword").value;
       const password2 = document.getElementById("registerPassword2").value;
       const displayName = email.split("@")[0] || "User";
 
       if (!isEmail(email)) {
+        showFormWarning("registerWarning", "registerName", "Masukkan email yang valid.");
         showToast("Masukkan email yang valid.");
         return;
       }
 
       if (password.length < 6) {
+        showFormWarning("registerWarning", "registerPassword", "Password minimal 6 karakter.");
         showToast("Password minimal 6 karakter.");
         return;
       }
 
       if (password !== password2) {
+        showFormWarning("registerWarning", "registerPassword2", "Ulangi password belum sama.");
         showToast("Ulangi password belum sama.");
         return;
       }
+
+      let safetyTimer = null;
 
       try {
         if (submitBtn) {
           submitBtn.disabled = true;
           submitBtn.textContent = "Mendaftarkan...";
+          safetyTimer = window.setTimeout(() => {
+            submitBtn.disabled = false;
+            submitBtn.textContent = oldBtnText || "Daftar & Masuk";
+            showFormWarning("registerWarning", "registerName", "Kalau masih loading, cek Supabase: Authentication > Providers > Email harus aktif dan Signups ON.");
+          }, 15000);
         }
 
         const auth = await supabaseSignUp(email, password, displayName);
 
-        /*
-          Kalau Supabase mengaktifkan email confirmation, signUp biasanya belum memberi access_token.
-          Jadi jangan langsung simpan data ke tabel. Tampilkan arahan cek email supaya user paham.
-        */
         if (!auth.access_token || !auth.user?.id) {
           showToast("Daftar berhasil. Cek email kamu, klik Confirm your mail, lalu login.");
           showEmailConfirmationGuide?.(email);
@@ -14589,24 +14619,42 @@
       } catch (error) {
         console.error(error);
 
-        const message = String(error?.message || "").toLowerCase();
+        const rawMessage = String(error?.message || "");
+        const message = rawMessage.toLowerCase();
+
+        if (message.includes("signup") && message.includes("disabled")) {
+          showFormWarning("registerWarning", "registerName", "Pendaftaran di Supabase masih OFF. Aktifkan Authentication > Providers > Email > Allow signups.");
+          showToast("Pendaftaran Supabase masih OFF.");
+          return;
+        }
+
         if (message.includes("already registered") || message.includes("already been registered") || message.includes("user already")) {
-          showToast("Email ini sudah terdaftar. Silakan pilih tab Login.");
+          showFormWarning("registerWarning", "registerName", "Email ini sudah terdaftar. Silakan pilih tab Login.");
+          showToast("Email ini sudah terdaftar. Silakan login.");
           switchAuth("login");
           document.getElementById("loginName").value = email;
           return;
         }
 
         if (message.includes("confirm") || message.includes("email not confirmed")) {
-          showToast("Email belum dikonfirmasi. Cek email dan klik Confirm your mail.");
+          showFormWarning("registerWarning", "registerName", "Email belum dikonfirmasi. Cek inbox/spam lalu klik Confirm your mail.");
+          showToast("Email belum dikonfirmasi.");
           showEmailConfirmationGuide?.(email);
           switchAuth("login");
           document.getElementById("loginName").value = email;
           return;
         }
 
-        showToast(error.message || "Daftar gagal. Coba lagi.");
+        if (message.includes("fetch") || message.includes("network") || message.includes("server lama")) {
+          showFormWarning("registerWarning", "registerName", "Koneksi/server Supabase belum merespons. Cek internet atau setting Auth Supabase.");
+          showToast("Server Supabase belum merespons.");
+          return;
+        }
+
+        showFormWarning("registerWarning", "registerName", rawMessage || "Daftar gagal. Coba lagi.");
+        showToast(rawMessage || "Daftar gagal. Coba lagi.");
       } finally {
+        if (safetyTimer) window.clearTimeout(safetyTimer);
         if (submitBtn) {
           submitBtn.disabled = false;
           submitBtn.textContent = oldBtnText || "Daftar & Masuk";
