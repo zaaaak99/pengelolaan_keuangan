@@ -8925,6 +8925,36 @@
       transform: none !important;
     }
 
+
+    /* Revisi grafik: bulan ini real-time dan bar bergerak halus */
+    .chart.realtime-chart {
+      grid-template-columns: repeat(var(--chart-count, 5), minmax(42px, 1fr)) !important;
+      align-items: end !important;
+      min-height: 245px;
+    }
+
+    .chart.realtime-chart .bar {
+      transition: height .55s ease, transform .22s ease, opacity .22s ease;
+      animation: chartRise .72s ease both;
+    }
+
+    .chart.realtime-chart .bar:hover {
+      transform: translateY(-4px);
+      opacity: .9;
+    }
+
+    @keyframes chartRise {
+      from { height: 4px; opacity: .45; }
+      to { opacity: 1; }
+    }
+
+    .chart-live-note {
+      margin-top: 10px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
 </style>
 </head>
 <body>
@@ -9433,7 +9463,7 @@
         <div class="grid grid-2">
           <div class="card">
             <div class="split">
-              <h3 class="card-title">Grafik 6 Bulan Terakhir</h3>
+              <h3 class="card-title">Grafik Bulan Ini Real-time</h3>
               <span class="pill"><span class="dot"></span>Masuk <span class="dot red"></span>Keluar</span>
             </div>
             <div id="cashflowChart" class="chart"></div>
@@ -9719,7 +9749,7 @@
 
           <div class="card">
             <h3 class="card-title">Akun Login</h3>
-            <p class="small">Login wajib menggunakan nama akun dan password yang sudah didaftarkan.</p>
+            <p class="small">Login memakai email dan password. Password bisa diubah setelah password lama benar.</p>
             <div class="form" style="margin-top:14px;">
               <label>Password Lama
                 <input id="oldPassword" type="password" autocomplete="current-password" placeholder="Password lama" />
@@ -10106,6 +10136,32 @@
         clearSupabaseSession();
         return null;
       }
+    }
+
+
+    async function supabaseUpdatePassword(newPassword) {
+      const session = await getValidSupabaseSession();
+      if (!session?.access_token) {
+        throw new Error("Session login sudah habis. Silakan logout lalu login lagi.");
+      }
+
+      const response = await fetch(`${SUPABASE_CONFIG.url}/auth/v1/user`, {
+        method: "PUT",
+        headers: {
+          "apikey": SUPABASE_CONFIG.anonKey,
+          "Authorization": `Bearer ${session.access_token}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ password: newPassword })
+      });
+
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const message = data?.error_description || data?.msg || data?.message || "Password gagal diubah.";
+        throw new Error(message);
+      }
+
+      return data;
     }
 
     async function supabaseSignOut() {
@@ -13688,33 +13744,55 @@
 
     function renderChart() {
       const target = document.getElementById("cashflowChart");
-      const months = [];
-      const date = new Date();
+      if (!target) return;
 
-      for (let i = 5; i >= 0; i--) {
-        const d = new Date(date.getFullYear(), date.getMonth() - i, 1);
-        months.push({
-          key: d.toISOString().slice(0, 7),
-          label: d.toLocaleDateString("id-ID", { month: "short" })
+      const now = new Date();
+      const year = now.getFullYear();
+      const month = now.getMonth();
+      const daysInMonth = new Date(year, month + 1, 0).getDate();
+      const buckets = [];
+
+      // Bagi bulan berjalan menjadi beberapa minggu agar grafik otomatis berubah tiap bulan.
+      for (let startDay = 1; startDay <= daysInMonth; startDay += 7) {
+        const endDay = Math.min(startDay + 6, daysInMonth);
+        buckets.push({
+          startDay,
+          endDay,
+          label: startDay === endDay ? String(startDay) : `${startDay}-${endDay}`,
+          income: 0,
+          expense: 0
         });
       }
 
-      const data = months.map(month => {
-        const items = transactions.filter(item => item.date && item.date.slice(0, 7) === month.key);
-        const income = items.filter(item => item.type === "income").reduce((sum, item) => sum + Number(item.amount || 0), 0);
-        const expense = items.filter(item => item.type === "expense").reduce((sum, item) => sum + Number(item.amount || 0), 0);
-        return { ...month, income, expense };
+      transactions.forEach(item => {
+        if (!item.date) return;
+        const itemDate = new Date(`${item.date}T00:00:00`);
+        if (itemDate.getFullYear() !== year || itemDate.getMonth() !== month) return;
+
+        const day = itemDate.getDate();
+        const bucket = buckets.find(part => day >= part.startDay && day <= part.endDay);
+        if (!bucket) return;
+
+        if (item.type === "income") bucket.income += Number(item.amount || 0);
+        if (item.type === "expense") bucket.expense += Number(item.amount || 0);
       });
 
-      const max = Math.max(1, ...data.map(item => Math.max(item.income, item.expense)));
+      const max = Math.max(1, ...buckets.map(item => Math.max(item.income, item.expense)));
+      target.classList.add("realtime-chart");
+      target.style.setProperty("--chart-count", buckets.length);
 
-      target.innerHTML = data.map(item => `
-        <div class="bar-group" title="${item.label}: Masuk ${money(item.income)}, Keluar ${money(item.expense)}">
-          <div class="bar" style="height:${Math.max(4, (item.income / max) * 100)}%"></div>
-          <div class="bar expense" style="height:${Math.max(4, (item.expense / max) * 100)}%"></div>
-          <span class="bar-label">${escapeHTML(item.label)}</span>
-        </div>
-      `).join("");
+      target.innerHTML = buckets.map(item => {
+        const incomeHeight = item.income > 0 ? Math.max(8, (item.income / max) * 100) : 4;
+        const expenseHeight = item.expense > 0 ? Math.max(8, (item.expense / max) * 100) : 4;
+
+        return `
+          <div class="bar-group" title="Tanggal ${item.label}: Masuk ${money(item.income)}, Keluar ${money(item.expense)}">
+            <div class="bar" style="height:${incomeHeight}%"></div>
+            <div class="bar expense" style="height:${expenseHeight}%"></div>
+            <span class="bar-label">${escapeHTML(item.label)}</span>
+          </div>
+        `;
+      }).join("") + `<div class="chart-live-note" style="grid-column:1/-1;">Update otomatis mengikuti transaksi bulan ini.</div>`;
     }
 
     function renderCategoryReport() {
@@ -14888,34 +14966,88 @@
         return;
       }
 
-      const oldPassword = document.getElementById("oldPassword").value;
-      const newPassword = document.getElementById("newPassword").value;
-      const newPassword2 = document.getElementById("newPassword2").value;
+      const oldInput = document.getElementById("oldPassword");
+      const newInput = document.getElementById("newPassword");
+      const newInput2 = document.getElementById("newPassword2");
+      const button = document.querySelector('button[onclick="changePassword()"]');
+
+      const oldPassword = oldInput?.value || "";
+      const newPassword = newInput?.value || "";
+      const newPassword2 = newInput2?.value || "";
+
+      if (!oldPassword) {
+        showToast("Masukkan password lama dulu.");
+        oldInput?.focus();
+        return;
+      }
 
       if (newPassword.length < 6) {
         showToast("Password baru minimal 6 karakter.");
+        newInput?.focus();
         return;
       }
 
       if (newPassword !== newPassword2) {
         showToast("Ulangi password baru belum sama.");
+        newInput2?.focus();
         return;
       }
 
-      const user = await getOne("users", currentUserEmail);
-      if (!user || await hashPassword(oldPassword) !== user.passwordHash) {
-        showToast("Password lama salah.");
-        return;
+      const oldButtonText = button ? button.textContent : "";
+      try {
+        if (button) {
+          button.disabled = true;
+          button.textContent = "Mengubah...";
+        }
+
+        const session = await getValidSupabaseSession();
+        const authEmail = session?.user?.email || (await getOne("users", currentUserEmail))?.authEmail || "";
+
+        if (!authEmail) {
+          showToast("Email login tidak ditemukan. Silakan logout lalu login ulang.");
+          return;
+        }
+
+        // Verifikasi password lama ke Supabase Auth.
+        await supabaseSignIn(authEmail, oldPassword);
+
+        // Update password baru ke Supabase Auth.
+        await supabaseUpdatePassword(newPassword);
+
+        const user = await getOne("users", currentUserEmail);
+        if (user) {
+          user.passwordHash = "";
+          user.updatedAt = new Date().toISOString();
+          await putData("users", user);
+        }
+
+        oldInput.value = "";
+        newInput.value = "";
+        newInput2.value = "";
+        showToast("Password email berhasil diubah.");
+      } catch (error) {
+        console.error(error);
+        const message = String(error?.message || "").toLowerCase();
+
+        if (message.includes("invalid login") || message.includes("invalid credentials") || message.includes("email or password")) {
+          showToast("Password lama salah.");
+          oldInput?.focus();
+          return;
+        }
+
+        if (message.includes("weak") || message.includes("password")) {
+          showToast(error.message || "Password baru belum valid.");
+          newInput?.focus();
+          return;
+        }
+
+        showToast(error.message || "Password gagal diubah. Coba login ulang.");
+      } finally {
+        if (button) {
+          button.disabled = false;
+          button.textContent = oldButtonText || "Ubah Password";
+        }
       }
-
-      user.passwordHash = await hashPassword(newPassword);
-      user.updatedAt = new Date().toISOString();
-      await putData("users", user);
-
-      document.getElementById("oldPassword").value = "";
-      document.getElementById("newPassword").value = "";
-      document.getElementById("newPassword2").value = "";
-      showToast("Password berhasil diubah.");
     }
 
     document.addEventListener("keydown", event => {
