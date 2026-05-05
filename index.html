@@ -8902,6 +8902,15 @@
       }
     }
 
+
+    /* Tombol auth loading agar user tahu proses daftar/login berjalan */
+    .auth-form button:disabled,
+    .auth-tabs button:disabled {
+      opacity: .72 !important;
+      cursor: wait !important;
+      transform: none !important;
+    }
+
 </style>
 </head>
 <body>
@@ -9004,6 +9013,8 @@
             <span>2. Buka email dari <b>Supabase Auth</b>.</span>
             <span>3. Klik <b>Confirm your mail</b>.</span>
             <span>4. Kembali ke web ini, lalu pilih <b>Login</b>.</span>
+            <span>Kalau email belum masuk, cek folder <b>Spam/Promotions</b> atau tunggu 1–2 menit.</span>
+
           </div>
 
 
@@ -10007,18 +10018,31 @@
       };
       if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
 
-      const response = await fetch(`${SUPABASE_CONFIG.url}/auth/v1/${path}`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify(body || {})
-      });
+      const controller = new AbortController();
+      const timeout = window.setTimeout(() => controller.abort(), 18000);
 
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        const message = data?.error_description || data?.msg || data?.message || "Request Supabase Auth gagal.";
-        throw new Error(message);
+      try {
+        const response = await fetch(`${SUPABASE_CONFIG.url}/auth/v1/${path}`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(body || {}),
+          signal: controller.signal
+        });
+
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          const message = data?.error_description || data?.msg || data?.message || "Request Supabase Auth gagal.";
+          throw new Error(message);
+        }
+        return data;
+      } catch (error) {
+        if (error?.name === "AbortError") {
+          throw new Error("Koneksi ke server terlalu lama. Coba lagi atau cek internet.");
+        }
+        throw error;
+      } finally {
+        window.clearTimeout(timeout);
       }
-      return data;
     }
 
     async function supabaseSignUp(email, password, displayName = "") {
@@ -14498,6 +14522,10 @@
     async function registerUser(event) {
       event.preventDefault();
 
+      const form = event.target;
+      const submitBtn = form?.querySelector('button[type="submit"]');
+      const oldBtnText = submitBtn ? submitBtn.textContent : "";
+
       const email = String(document.getElementById("registerName").value || "").trim().toLowerCase();
       const password = document.getElementById("registerPassword").value;
       const password2 = document.getElementById("registerPassword2").value;
@@ -14519,10 +14547,19 @@
       }
 
       try {
+        if (submitBtn) {
+          submitBtn.disabled = true;
+          submitBtn.textContent = "Mendaftarkan...";
+        }
+
         const auth = await supabaseSignUp(email, password, displayName);
 
+        /*
+          Kalau Supabase mengaktifkan email confirmation, signUp biasanya belum memberi access_token.
+          Jadi jangan langsung simpan data ke tabel. Tampilkan arahan cek email supaya user paham.
+        */
         if (!auth.access_token || !auth.user?.id) {
-          showToast("Daftar berhasil. Cek email kamu, klik Confirm your mail, lalu kembali login.");
+          showToast("Daftar berhasil. Cek email kamu, klik Confirm your mail, lalu login.");
           showEmailConfirmationGuide?.(email);
           switchAuth("login");
           document.getElementById("loginName").value = email;
@@ -14551,13 +14588,39 @@
         showToast("Daftar berhasil. Kamu sudah masuk dashboard.");
       } catch (error) {
         console.error(error);
+
+        const message = String(error?.message || "").toLowerCase();
+        if (message.includes("already registered") || message.includes("already been registered") || message.includes("user already")) {
+          showToast("Email ini sudah terdaftar. Silakan pilih tab Login.");
+          switchAuth("login");
+          document.getElementById("loginName").value = email;
+          return;
+        }
+
+        if (message.includes("confirm") || message.includes("email not confirmed")) {
+          showToast("Email belum dikonfirmasi. Cek email dan klik Confirm your mail.");
+          showEmailConfirmationGuide?.(email);
+          switchAuth("login");
+          document.getElementById("loginName").value = email;
+          return;
+        }
+
         showToast(error.message || "Daftar gagal. Coba lagi.");
+      } finally {
+        if (submitBtn) {
+          submitBtn.disabled = false;
+          submitBtn.textContent = oldBtnText || "Daftar & Masuk";
+        }
       }
     }
 
     async function loginUser(event) {
       event.preventDefault();
       clearFormWarning("loginWarning", "loginPassword");
+
+      const form = event.target;
+      const submitBtn = form?.querySelector('button[type="submit"]');
+      const oldBtnText = submitBtn ? submitBtn.textContent : "";
 
       const email = String(document.getElementById("loginName").value || "").trim().toLowerCase();
       const password = document.getElementById("loginPassword").value;
@@ -14569,6 +14632,11 @@
       }
 
       try {
+        if (submitBtn) {
+          submitBtn.disabled = true;
+          submitBtn.textContent = "Masuk...";
+        }
+
         const auth = await supabaseSignIn(email, password);
         if (!auth.user?.id) throw new Error("Login gagal.");
 
@@ -14597,9 +14665,23 @@
         showToast("Login berhasil.");
       } catch (error) {
         console.error(error);
-        showFormWarning("loginWarning", "loginPassword", "Email atau password salah.");
-        showToast("Email atau password salah.");
+        const message = String(error?.message || "").toLowerCase();
+
+        if (message.includes("email not confirmed") || message.includes("not confirmed")) {
+          showFormWarning("loginWarning", "loginPassword", "Email belum dikonfirmasi. Cek inbox/spam lalu klik Confirm your mail.");
+          showEmailConfirmationGuide?.(email);
+          showToast("Email belum dikonfirmasi.");
+        } else {
+          showFormWarning("loginWarning", "loginPassword", "Email atau password salah.");
+          showToast("Email atau password salah.");
+        }
+
         document.getElementById("loginPassword")?.focus();
+      } finally {
+        if (submitBtn) {
+          submitBtn.disabled = false;
+          submitBtn.textContent = oldBtnText || "Masuk Dashboard";
+        }
       }
     }
 
