@@ -8855,6 +8855,14 @@
       text-transform: none !important;
     }
 
+
+    /* FIX AUTH EMAIL FIELD — khusus tampilan daftar/login */
+    #registerName,
+    #loginName {
+      text-transform: none !important;
+      autocapitalize: none;
+    }
+
 </style>
 </head>
 <body>
@@ -8957,8 +8965,8 @@
         </div>
 
         <form id="loginForm" class="form auth-form">
-          <label>Nama Akun
-            <input id="loginName" type="text" autocomplete="username" placeholder="Contoh: Zakiy" minlength="3" required />
+          <label>Email
+            <input id="loginName" type="email" autocomplete="username" placeholder="emailkamu@example.com" minlength="3" required />
           </label>
           <label>Password
             <input id="loginPassword" type="password" autocomplete="current-password" placeholder="Masukkan password" required />
@@ -8969,8 +8977,8 @@
         </form>
 
         <form id="registerForm" class="form auth-form active">
-          <label>Nama Akun
-            <input id="registerName" type="text" autocomplete="username" placeholder="Contoh: zakiy" minlength="3" required />
+          <label>Email
+            <input id="registerName" type="email" autocomplete="username" placeholder="emailkamu@example.com" minlength="3" required />
           </label>
           <label>Buat Password
             <input id="registerPassword" type="password" autocomplete="new-password" placeholder="Minimal 6 karakter" required />
@@ -9667,7 +9675,7 @@
             </div>
             <div class="form" style="margin-top:14px;">
               <label>Nama Aplikasi
-                <input id="brandNameInput" type="text" maxlength="24" placeholder="Contoh: zakiy, Pori Finance, Dompetku" />
+                <input id="brandNameInput" type="text" maxlength="24" placeholder="emailkamu@example.com, Pori Finance, Dompetku" />
               </label>
               <button class="btn btn-primary" type="button" onclick="saveBrandName()">Simpan Nama Aplikasi</button>
             </div>
@@ -15937,6 +15945,39 @@
       };
 
       initSupabaseCloud().then(() => updateStorageModeUI()).catch(() => {});
+    })();
+
+
+    /* Fix tampilan field Email daftar/login */
+    (function fixAuthEmailFieldLabels() {
+      function applyAuthEmailFields() {
+        const register = document.getElementById("registerName");
+        const login = document.getElementById("loginName");
+
+        [register, login].forEach(input => {
+          if (!input) return;
+          input.type = "email";
+          input.placeholder = "emailkamu@example.com";
+          input.autocomplete = "email";
+          input.setAttribute("autocapitalize", "none");
+          input.setAttribute("inputmode", "email");
+        });
+
+        const labels = document.querySelectorAll("#registerForm label, #loginForm label");
+        labels.forEach(label => {
+          const input = label.querySelector("#registerName, #loginName");
+          if (!input) return;
+          for (const node of label.childNodes) {
+            if (node.nodeType === Node.TEXT_NODE && node.textContent.includes("Nama Akun")) {
+              node.textContent = node.textContent.replace("Nama Akun", "Email");
+            }
+          }
+        });
+      }
+
+      document.addEventListener("DOMContentLoaded", applyAuthEmailFields);
+      window.addEventListener("pageshow", applyAuthEmailFields, { passive: true });
+      setTimeout(applyAuthEmailFields, 300);
     })();
 
 </script>
